@@ -1,5 +1,5 @@
-#include <xen/events.h>
-#include <xen/generic.h>
+#include <zephyr/xen/events.h>
+#include <zephyr/xen/generic.h>
 
 struct domain_console {
 
