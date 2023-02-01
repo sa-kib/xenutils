@@ -75,7 +75,7 @@ static int allocate_magic_pages(int domid, uint64_t base_pfn)
 {
 	int rc, i;
 	uint64_t nr_exts = NR_MAGIC_PAGES;
-	xen_pfn_t magic_base_pfn = PHYS_PFN(GUEST_MAGIC_BASE);
+	xen_pfn_t magic_base_pfn = XEN_PHYS_PFN(GUEST_MAGIC_BASE);
 	xen_pfn_t extents[nr_exts];
 	void *mapped_magic;
 	xen_pfn_t mapped_base_pfn, mapped_pfns[nr_exts];
@@ -90,7 +90,7 @@ static int allocate_magic_pages(int domid, uint64_t base_pfn)
 
 	/* Need to clear memory content of magic pages */
 	mapped_magic = k_aligned_alloc(XEN_PAGE_SIZE, XEN_PAGE_SIZE * nr_exts);
-	mapped_base_pfn = PHYS_PFN((uint64_t) mapped_magic);
+	mapped_base_pfn = XEN_PHYS_PFN((uint64_t) mapped_magic);
 	for (i = 0; i < nr_exts; i++) {
 		mapped_pfns[i] = mapped_base_pfn + i;
 	}
@@ -142,25 +142,25 @@ static int prepare_domu_physmap(int domid, uint64_t base_pfn,
 	return allocate_magic_pages(domid, base_pfn);
 }
 
-extern char __zephyr_domu_start[];
-extern char __zephyr_domu_end[];
-uint64_t load_domu_image(int domid, uint64_t base_addr)
+extern char __img_domd_start[];
+extern char __img_domd_end[];
+uint64_t load_domd_image(int domid, uint64_t base_addr)
 {
 	int i, rc;
-	void *mapped_domu;
+	void *mapped_domd;
 	uint64_t mapped_base_pfn;
-	uint64_t domu_size = __zephyr_domu_end - __zephyr_domu_start;
-	uint64_t nr_pages = ceiling_fraction(domu_size, XEN_PAGE_SIZE);
+	uint64_t domd_size = __img_domd_end - __img_domd_start;
+	uint64_t nr_pages = ceiling_fraction(domd_size, XEN_PAGE_SIZE);
 	xen_pfn_t mapped_pfns[nr_pages];
 	xen_pfn_t indexes[nr_pages];
 	int err_codes[nr_pages];
 	struct xen_domctl_cacheflush cacheflush;
 
-	struct zimage64_hdr *zhdr = (struct zimage64_hdr *) __zephyr_domu_start;
-	uint64_t base_pfn = PHYS_PFN(base_addr);
+	struct zimage64_hdr *zhdr = (struct zimage64_hdr *) __img_domd_start;
+	uint64_t base_pfn = XEN_PHYS_PFN(base_addr);
 
-	mapped_domu = k_aligned_alloc(XEN_PAGE_SIZE, XEN_PAGE_SIZE * nr_pages);
-	mapped_base_pfn = PHYS_PFN((uint64_t) mapped_domu);
+	mapped_domd = k_aligned_alloc(XEN_PAGE_SIZE, XEN_PAGE_SIZE * nr_pages);
+	mapped_base_pfn = XEN_PHYS_PFN((uint64_t) mapped_domd);
 
 	for (i = 0; i < nr_pages; i++) {
 		mapped_pfns[i] = mapped_base_pfn + i;
@@ -170,12 +170,12 @@ uint64_t load_domu_image(int domid, uint64_t base_addr)
 	rc = xendom_add_to_physmap_batch(DOMID_SELF, domid, XENMAPSPACE_gmfn_foreign,
 				nr_pages, indexes, mapped_pfns, err_codes);
 	printk("Return code for XENMEM_add_to_physmap_batch = %d\n", rc);
-	printk("mapped_domu = %p\n", mapped_domu);
+	printk("mapped_domu = %p\n", mapped_domd);
 	printk("Zephyr DomU start addr = %p, end addr = %p, binary size = 0x%llx\n",
-		__zephyr_domu_start, __zephyr_domu_end, domu_size);
+		__img_domd_start, __img_domd_end, domd_size);
 
 	/* Copy binary to domain pages and clear cache */
-	memcpy(mapped_domu, __zephyr_domu_start, domu_size);
+	memcpy(mapped_domd, __img_domd_start, domd_size);
 
 	cacheflush.start_pfn = mapped_base_pfn;
 	cacheflush.nr_pfns = nr_pages;
@@ -194,7 +194,7 @@ uint64_t load_domu_image(int domid, uint64_t base_addr)
 	rc = xendom_populate_physmap(DOMID_SELF, 0, nr_pages, 0, mapped_pfns);
 	printk(">>> Return code = %d XENMEM_populate_physmap\n", rc);
 
-	k_free(mapped_domu);
+	k_free(mapped_domd);
 
 	/* .text start address in domU memory */
 	return base_addr + zhdr->text_offset;
@@ -213,8 +213,8 @@ int map_domain_console_ring(struct xen_domain *domain)
 		return -ENOMEM;
 	}
 
-	ring_pfn = virt_to_pfn(mapped_ring);
-	idx = PHYS_PFN(GUEST_MAGIC_BASE) + CONSOLE_PFN_OFFSET;
+	ring_pfn = xen_virt_to_gfn(mapped_ring);
+	idx = XEN_PHYS_PFN(GUEST_MAGIC_BASE) + CONSOLE_PFN_OFFSET;
 
 	/* adding single page, but only xatpb can map with foreign domid */
 	rc = xendom_add_to_physmap_batch(DOMID_SELF, domain->domid, XENMAPSPACE_gmfn_foreign,
@@ -298,7 +298,7 @@ int domu_create(const struct shell *shell, size_t argc, char **argv)
 	struct vcpu_guest_context vcpu_ctx;
 	struct xen_domctl_scheduler_op sched_op;
 	uint64_t base_addr = GUEST_RAM0_BASE;
-	uint64_t base_pfn = PHYS_PFN(base_addr);
+	uint64_t base_pfn = XEN_PHYS_PFN(base_addr);
 	uint64_t ventry;
 	struct xen_domain *domain;
 
@@ -342,7 +342,7 @@ int domu_create(const struct shell *shell, size_t argc, char **argv)
 	/* TODO: fix mem amount here, some memory should left for populating magic pages */
 	rc = prepare_domu_physmap(domid, base_pfn, DOMU_MAXMEM_KB/2);
 
-	ventry = load_domu_image(domid, base_addr);
+	ventry = load_domd_image(domid, base_addr);
 
 	memset(&vcpu_ctx, 0, sizeof(vcpu_ctx));
 	vcpu_ctx.user_regs.pc64 = ventry;
@@ -414,7 +414,7 @@ int domu_destroy(const struct shell *shell, size_t argc, char **argv)
 	}
 
 	/* TODO: do this on console destroying */
-	ring_pfn = virt_to_pfn(domain->intf);
+	ring_pfn = xen_virt_to_gfn(domain->intf);
 	rc = xendom_remove_from_physmap(DOMID_SELF, ring_pfn);
 	printk("Return code for xendom_remove_from_physmap = %d, (console ring)\n", rc);
 
